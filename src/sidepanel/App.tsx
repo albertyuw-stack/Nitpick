@@ -526,7 +526,7 @@ export function App() {
               <span style={{ fontSize: 11, color: 'var(--color-gray-400)' }}>Optional</span>
             </div>
             <Input
-              placeholder="e.g. MIST-"
+              placeholder="e.g. SpaceName-"
               leftIcon="TextSearch"
               value={pattern}
               onChange={e => handlePatternChange(e.target.value)}

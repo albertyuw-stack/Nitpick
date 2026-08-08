@@ -1,4 +1,15 @@
 import { JiraConfig, DeploymentType, TicketInfo } from '@/shared/types';
+import { decryptString, encryptString, EncryptedValue } from './secure-store';
+
+// Shape persisted in chrome.storage.local — the auth header is stored
+// encrypted; `token` only appears in legacy configs and is migrated on
+// first load.
+interface StoredJiraConfig {
+  baseUrl: string;
+  deploymentType: DeploymentType;
+  auth?: EncryptedValue;
+  token?: string;
+}
 
 export class JiraClient {
   private config: JiraConfig | null = null;
@@ -6,13 +17,37 @@ export class JiraClient {
   async loadConfig(): Promise<JiraConfig | null> {
     if (this.config) return this.config;
     const stored = await chrome.storage.local.get(['jiraConfig']);
-    this.config = stored.jiraConfig ?? null;
-    return this.config;
+    const raw = stored.jiraConfig as StoredJiraConfig | undefined;
+    if (!raw?.baseUrl) return null;
+
+    if (raw.token) {
+      // Legacy plaintext config — re-save encrypted
+      this.config = { baseUrl: raw.baseUrl, token: raw.token, deploymentType: raw.deploymentType };
+      await this.saveConfig(this.config);
+      return this.config;
+    }
+
+    if (!raw.auth) return null;
+    try {
+      const token = await decryptString(raw.auth);
+      this.config = { baseUrl: raw.baseUrl, token, deploymentType: raw.deploymentType };
+      return this.config;
+    } catch {
+      // Encryption key is gone (e.g. site data cleared) — the credential
+      // is unrecoverable, so drop the config and let the user reconnect.
+      await this.clearConfig();
+      return null;
+    }
   }
 
   async saveConfig(config: JiraConfig): Promise<void> {
     this.config = config;
-    await chrome.storage.local.set({ jiraConfig: config });
+    const storedConfig: StoredJiraConfig = {
+      baseUrl: config.baseUrl,
+      deploymentType: config.deploymentType,
+      auth: await encryptString(config.token),
+    };
+    await chrome.storage.local.set({ jiraConfig: storedConfig });
   }
 
   async clearConfig(): Promise<void> {
