@@ -203,11 +203,10 @@ export function App() {
       return;
     }
 
-    // captureVisibleTab requires activeTab or effective all-hosts access
-    // (Chromium's kActiveTabOrAllUrls check) — a single-origin grant lets
-    // us inject the overlay but not capture the screenshot. activeTab
-    // isn't granted for side-panel clicks, so request the wildcard hosts
-    // once (one-time Chrome prompt).
+    // captureVisibleTab requires activeTab or the literal <all_urls>
+    // pattern (Chromium's kActiveTabOrAllUrls check rejects scheme
+    // wildcards like https://*/*). activeTab isn't granted for
+    // side-panel clicks, so request <all_urls> once (one-time prompt).
     try {
       const url = new URL(tab.url);
       if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('restricted');
@@ -217,7 +216,7 @@ export function App() {
       return;
     }
 
-    const granted = await chrome.permissions.request({ origins: ['https://*/*', 'http://*/*'] }).catch(() => false);
+    const granted = await chrome.permissions.request({ origins: ['<all_urls>'] }).catch(() => false);
     if (!granted) {
       setPinError('Chrome needs site access to capture screenshots. Click "Drop a pin" again and choose Allow.');
       setPinning(false);
