@@ -11,6 +11,7 @@ run('vite build --config vite.background.config.ts');
 run('vite build --config vite.content.config.ts');
 
 fs.copyFileSync(path.join(root, 'manifest.json'), path.join(root, 'dist/manifest.json'));
+fs.cpSync(path.join(root, 'icons'), path.join(root, 'dist/icons'), { recursive: true });
 
 // Vite emits the panel html at dist/index.html (root: src/sidepanel); the
 // manifest expects sidepanel.html.

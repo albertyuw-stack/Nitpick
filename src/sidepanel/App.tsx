@@ -365,14 +365,8 @@ export function App() {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
         <div style={{ padding: '48px 24px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, textAlign: 'center' }}>
-          <div style={{
-            width: 48, height: 48, borderRadius: 10,
-            background: 'linear-gradient(180deg,var(--color-nav-grade-top),var(--color-nav-grade-bottom))',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
-          }}>
-            <Icon name="MapPin" size={26} />
-          </div>
-          <div style={{ font: '700 18px Inter,sans-serif', color: 'var(--color-gray-800)' }}>PinPoint for Jira</div>
+          <img src="icons/icon128.png" alt="Nitpick" width={48} height={48} style={{ borderRadius: 10 }} />
+          <div style={{ font: '700 18px Inter,sans-serif', color: 'var(--color-gray-800)' }}>Nitpick</div>
           <div style={{ fontSize: 13, lineHeight: '20px', color: 'var(--color-gray-600)', maxWidth: 280 }}>
             Pin feedback to any webpage and post it straight to a Jira ticket.
           </div>
