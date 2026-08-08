@@ -113,13 +113,14 @@ export class JiraClient {
   async postComment(key: string, text: string, imageFilename: string, pinLocation: string): Promise<{ success: boolean; error?: string }> {
     try {
       const config = await this.requireConfig();
-      const isCloud = config.deploymentType === 'Cloud';
-      const apiVersion = isCloud ? '3' : '2';
-      const body = isCloud
-        ? this.buildCloudCommentBody(text, pinLocation)
-        : this.buildDataCenterCommentBody(text, imageFilename, pinLocation);
+      // Use the v2 endpoint with a wiki-markup body on Cloud too: Cloud's
+      // v2 API converts the string to ADF server-side and resolves
+      // !filename! against the issue's attachments, rendering the
+      // screenshot inline. (v3 ADF media nodes would need the internal
+      // media UUID, which the attachments API doesn't return.)
+      const body = this.buildWikiCommentBody(text, imageFilename, pinLocation);
 
-      const response = await fetch(`${config.baseUrl}/rest/api/${apiVersion}/issue/${encodeURIComponent(key)}/comment`, {
+      const response = await fetch(`${config.baseUrl}/rest/api/2/issue/${encodeURIComponent(key)}/comment`, {
         method: 'POST',
         headers: {
           Authorization: config.token,
@@ -137,23 +138,9 @@ export class JiraClient {
     }
   }
 
-  private buildDataCenterCommentBody(text: string, imageFilename: string, pinLocation: string): Record<string, unknown> {
+  private buildWikiCommentBody(text: string, imageFilename: string, pinLocation: string): Record<string, unknown> {
     return {
       body: `${text}\n\n!${imageFilename}|width=600!\nPin location: ${pinLocation}`,
-    };
-  }
-
-  private buildCloudCommentBody(text: string, pinLocation: string): Record<string, unknown> {
-    const paragraph = (t: string) => ({
-      type: 'paragraph',
-      content: [{ type: 'text', text: t }],
-    });
-    return {
-      body: {
-        version: 1,
-        type: 'doc',
-        content: [paragraph(text), paragraph(`Pin location: ${pinLocation} (screenshot attached)`)],
-      },
     };
   }
 
