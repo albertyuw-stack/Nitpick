@@ -1,5 +1,6 @@
 import { JiraClient } from './jira-client';
-import { Message, TICKET_ID_REGEX } from '@/shared/types';
+import { Message } from '@/shared/types';
+import { loadTicketRegex } from '@/shared/ticket-pattern';
 
 const jiraClient = new JiraClient();
 let activePinTabId: number | null = null;
@@ -28,9 +29,10 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
   }
 });
 
-function detectTicketFromUrl(url?: string): void {
+async function detectTicketFromUrl(url?: string): Promise<void> {
   if (!url) return;
-  const match = url.match(TICKET_ID_REGEX);
+  const regex = await loadTicketRegex();
+  const match = url.match(regex);
   if (match) {
     broadcastToPanel({ type: 'urlTicketDetected', key: match[0] });
   }
@@ -40,6 +42,10 @@ async function handleMessage(message: Message, senderTabId?: number): Promise<an
   switch (message.type) {
     case 'connect':
       return jiraClient.connect(message.baseUrl, message.token, message.email);
+
+    case 'disconnect':
+      await jiraClient.clearConfig();
+      return { success: true };
 
     case 'testConnection':
       return jiraClient.testConnection();

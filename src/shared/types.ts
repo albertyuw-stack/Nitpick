@@ -25,6 +25,7 @@ export interface PinCoordinates {
 
 export type Message =
   | { type: 'connect'; baseUrl: string; token: string; email?: string }
+  | { type: 'disconnect' }
   | { type: 'testConnection' }
   | { type: 'validateTicket'; key: string }
   | { type: 'startPinMode'; tabId: number }

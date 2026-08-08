@@ -15,6 +15,11 @@ export class JiraClient {
     await chrome.storage.local.set({ jiraConfig: config });
   }
 
+  async clearConfig(): Promise<void> {
+    this.config = null;
+    await chrome.storage.local.remove('jiraConfig');
+  }
+
   async connect(baseUrl: string, token: string, email?: string): Promise<{ success: boolean; deploymentType?: DeploymentType; displayName?: string; error?: string }> {
     const normalizedUrl = baseUrl.replace(/\/+$/, '');
 

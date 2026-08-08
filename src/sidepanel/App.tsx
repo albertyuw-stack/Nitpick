@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Message, PinCoordinates, TicketInfo, TICKET_ID_REGEX } from '@/shared/types';
+import { DEFAULT_TICKET_PATTERN, loadTicketRegex } from '@/shared/ticket-pattern';
 import { Alert, Avatar, Button, Icon, IconButton, Input, PinMarker, Spinner, StatusTag, Textarea } from './mist';
 
 type Screen = 'loading' | 'setup' | 'connected-splash' | 'main' | 'compose' | 'success';
@@ -39,6 +40,11 @@ export function App() {
   const [connectError, setConnectError] = useState<string | null>(null);
   const [instanceDomain, setInstanceDomain] = useState('');
   const [sessionExpired, setSessionExpired] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
+
+  // Settings
+  const [pattern, setPattern] = useState(DEFAULT_TICKET_PATTERN);
+  const [patternError, setPatternError] = useState<string | null>(null);
 
   // Ticket
   const [ticketKey, setTicketKey] = useState('');
@@ -62,20 +68,23 @@ export function App() {
   const ticketRef = useRef<TicketInfo | null>(null);
   ticketRef.current = ticket;
 
-  /* ── boot: restore stored connection ── */
+  /* ── boot: restore stored connection + settings ── */
   useEffect(() => {
     Promise.all([
-      chrome.storage.local.get(['jiraConfig']),
+      chrome.storage.local.get(['jiraConfig', 'ticketPattern']),
       chrome.runtime.sendMessage({ type: 'testConnection' }).catch(() => null),
     ]).then(([stored, result]) => {
       const cfg = stored.jiraConfig;
+      if (stored.ticketPattern) setPattern(stored.ticketPattern);
       if (cfg?.baseUrl) {
         setBaseUrl(cfg.baseUrl);
         setInstanceDomain(domainOf(cfg.baseUrl));
       }
       if (result?.success) {
+        setIsConnected(true);
         setScreen('main');
       } else if (cfg?.baseUrl) {
+        setIsConnected(true);
         setScreen('main');
         setSessionExpired(true);
       } else {
@@ -114,8 +123,10 @@ export function App() {
   /* ── detect ticket in current tab when main opens ── */
   useEffect(() => {
     if (screen !== 'main') return;
-    chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-      const match = tab?.url?.match(TICKET_ID_REGEX);
+    (async () => {
+      const regex = await loadTicketRegex();
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const match = tab?.url?.match(regex);
       if (match) {
         setTicketKey(prev => {
           if (prev) return prev;
@@ -123,14 +134,23 @@ export function App() {
           return match[0];
         });
       }
-    });
+    })();
   }, [screen]);
 
   /* ── debounced ticket validation ── */
   const validateTicket = useCallback((key: string) => {
     setTicket(null);
     setTicketError(null);
-    if (!key || !TICKET_ID_REGEX.test(key)) return;
+    if (!key) return;
+    let plausible = TICKET_ID_REGEX.test(key);
+    if (!plausible) {
+      try {
+        plausible = new RegExp(pattern).test(key);
+      } catch {
+        // Invalid custom pattern — default check already ran
+      }
+    }
+    if (!plausible) return;
     setValidating(true);
     chrome.runtime.sendMessage({ type: 'validateTicket', key }).then(result => {
       setValidating(false);
@@ -143,7 +163,7 @@ export function App() {
       setValidating(false);
       setTicketError('Could not reach Jira.');
     });
-  }, []);
+  }, [pattern]);
 
   useEffect(() => {
     clearTimeout(validateTimer.current);
@@ -187,6 +207,7 @@ export function App() {
     if (result?.success) {
       setInstanceDomain(domainOf(baseUrl.trim()));
       setSessionExpired(false);
+      setIsConnected(true);
       setToken('');
       setScreen('connected-splash');
       setTimeout(() => setScreen('main'), 1400);
@@ -283,9 +304,10 @@ export function App() {
     setScanNote(null);
     setRescanning(true);
     try {
+      const regex = await loadTicketRegex();
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      let found = tab?.url?.match(TICKET_ID_REGEX)?.[0]
-        ?? tab?.title?.match(TICKET_ID_REGEX)?.[0]
+      let found = tab?.url?.match(regex)?.[0]
+        ?? tab?.title?.match(regex)?.[0]
         ?? null;
 
       // Fall back to scanning the page content itself (title + visible
@@ -300,7 +322,7 @@ export function App() {
                 ?? document.body?.innerText.match(re)?.[0]
                 ?? null;
             },
-            args: [TICKET_ID_REGEX.source],
+            args: [regex.source],
           });
           found = (results[0]?.result as string | null) ?? null;
         } catch {
@@ -327,6 +349,38 @@ export function App() {
   const openSettings = () => {
     setConnectError(null);
     setScreen('setup');
+  };
+
+  const handleDisconnect = async () => {
+    await chrome.runtime.sendMessage({ type: 'disconnect' }).catch(() => {});
+    // Keep the instance URL for easy reconnect; wipe the token.
+    setIsConnected(false);
+    setSessionExpired(false);
+    setToken('');
+    setTicket(null);
+    setConnectError(null);
+  };
+
+  const handlePatternChange = (value: string) => {
+    setPattern(value);
+    if (!value.trim() || value === DEFAULT_TICKET_PATTERN) {
+      setPatternError(null);
+      chrome.storage.local.remove('ticketPattern').catch(() => {});
+      return;
+    }
+    try {
+      new RegExp(value);
+      setPatternError(null);
+      chrome.storage.local.set({ ticketPattern: value }).catch(() => {});
+    } catch {
+      setPatternError('Not a valid regular expression — the default pattern is used instead.');
+    }
+  };
+
+  const resetPattern = () => {
+    setPattern(DEFAULT_TICKET_PATTERN);
+    setPatternError(null);
+    chrome.storage.local.remove('ticketPattern').catch(() => {});
   };
 
   const maximizeScreenshot = () => {
@@ -362,6 +416,7 @@ export function App() {
   }
 
   if (screen === 'setup') {
+    const showConnected = isConnected && !sessionExpired;
     return (
       <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
         <div style={{ padding: '48px 24px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, textAlign: 'center' }}>
@@ -377,6 +432,15 @@ export function App() {
             <Alert status="error" title="Connection failed">{connectError}</Alert>
           )}
 
+          {showConnected && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <StatusTag variant="success">Connected</StatusTag>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--color-gray-600)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {instanceDomain}
+              </span>
+            </div>
+          )}
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <label style={label}>Jira instance URL</label>
             <Input
@@ -385,7 +449,7 @@ export function App() {
               leftIcon="LucideLink2"
               value={baseUrl}
               onChange={e => setBaseUrl(e.target.value)}
-              isDisabled={connecting}
+              isDisabled={connecting || showConnected}
               isInvalid={!!connectError}
               required
             />
@@ -394,25 +458,29 @@ export function App() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
               <label style={label}>{useCloudAuth ? 'API token' : 'Personal Access Token'}</label>
-              <a href={PAT_DOCS_URL} target="_blank" rel="noreferrer" style={{ fontSize: 11 }}>Where do I find this?</a>
+              {!showConnected && (
+                <a href={PAT_DOCS_URL} target="_blank" rel="noreferrer" style={{ fontSize: 11 }}>Where do I find this?</a>
+              )}
             </div>
             <Input
-              type={showToken ? 'text' : 'password'}
+              type={showToken && !showConnected ? 'text' : 'password'}
               placeholder="••••••••••••••••"
               leftIcon="Lock"
               rightIcon={
-                <span onClick={() => setShowToken(v => !v)} style={{ display: 'inline-flex', cursor: 'pointer' }}>
-                  <Icon name="Eye" size={16} />
-                </span>
+                !showConnected && (
+                  <span onClick={() => setShowToken(v => !v)} style={{ display: 'inline-flex', cursor: 'pointer' }}>
+                    <Icon name="Eye" size={16} />
+                  </span>
+                )
               }
-              value={token}
+              value={showConnected ? '0000000000000000' : token}
               onChange={e => setToken(e.target.value)}
-              isDisabled={connecting}
-              required
+              isDisabled={connecting || showConnected}
+              required={!showConnected}
             />
           </div>
 
-          {useCloudAuth && (
+          {useCloudAuth && !showConnected && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               <label style={label}>Email</label>
               <Input
@@ -426,23 +494,75 @@ export function App() {
             </div>
           )}
 
-          <Button type="submit" size="md" variant="solid" colorScheme="primary" style={{ width: '100%' }} isDisabled={connecting}>
-            {connecting ? (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Spinner />Connecting…</span>
-            ) : connectError ? (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Icon name="RefreshCw" size={14} />Retry connection</span>
-            ) : 'Connect'}
-          </Button>
+          {showConnected ? (
+            <Button
+              key="disconnect"
+              size="md"
+              variant="solid"
+              colorScheme="error"
+              style={{ width: '100%' }}
+              onClick={e => { e.preventDefault(); void handleDisconnect(); }}
+            >
+              Disconnect
+            </Button>
+          ) : (
+            <Button key="connect" type="submit" size="md" variant="solid" colorScheme="primary" style={{ width: '100%' }} isDisabled={connecting}>
+              {connecting ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Spinner />Connecting…</span>
+              ) : connectError ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Icon name="RefreshCw" size={14} />Retry connection</span>
+              ) : 'Connect'}
+            </Button>
+          )}
 
           <div style={{ fontSize: 11, lineHeight: '16px', color: 'var(--color-gray-500)', textAlign: 'center' }}>
             Your token is stored locally in this browser and only sent to your Jira instance.
           </div>
 
-          <div style={{ textAlign: 'center' }}>
-            <a href="#" onClick={e => { e.preventDefault(); setUseCloudAuth(v => !v); }} style={{ fontSize: 11 }}>
-              {useCloudAuth ? 'Using Data Center? Switch to a Personal Access Token' : 'Using Jira Cloud? Switch to email + API token'}
-            </a>
+          {!showConnected && (
+            <div style={{ textAlign: 'center' }}>
+              <a href="#" onClick={e => { e.preventDefault(); setUseCloudAuth(v => !v); }} style={{ fontSize: 11 }}>
+                {useCloudAuth ? 'Using Data Center? Switch to a Personal Access Token' : 'Using Jira Cloud? Switch to email + API token'}
+              </a>
+            </div>
+          )}
+
+          <div style={{ borderTop: '1px solid var(--color-gray-200)', paddingTop: 16, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+              <label style={label}>Ticket ID scan pattern</label>
+              {pattern !== DEFAULT_TICKET_PATTERN && (
+                <a href="#" onClick={e => { e.preventDefault(); resetPattern(); }} style={{ fontSize: 11 }}>Reset to default</a>
+              )}
+            </div>
+            <Input
+              placeholder={DEFAULT_TICKET_PATTERN}
+              leftIcon="TextSearch"
+              value={pattern}
+              onChange={e => handlePatternChange(e.target.value)}
+              isInvalid={!!patternError}
+              inputStyle={{ fontFamily: 'var(--font-mono)', fontWeight: 400 }}
+              spellCheck={false}
+              autoComplete="off"
+            />
+            {patternError ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--color-error-default)' }}>
+                <Icon name="TriangleAlert" size={12} />
+                {patternError}
+              </div>
+            ) : (
+              <div style={{ fontSize: 11, lineHeight: '16px', color: 'var(--color-gray-500)' }}>
+                Regular expression used to find ticket IDs in page URLs, tab titles, and page content.
+              </div>
+            )}
           </div>
+
+          {showConnected && (
+            <div style={{ textAlign: 'center' }}>
+              <a href="#" onClick={e => { e.preventDefault(); setScreen('main'); }} style={{ fontSize: 12 }}>
+                ← Back to pinning
+              </a>
+            </div>
+          )}
         </form>
       </div>
     );
