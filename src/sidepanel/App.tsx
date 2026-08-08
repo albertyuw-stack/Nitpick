@@ -1,77 +1,103 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Message, PinCoordinates, TicketInfo, TICKET_ID_REGEX } from '@/shared/types';
+import { Alert, Avatar, Button, Icon, IconButton, Input, PinMarker, Spinner, StatusTag, Textarea } from './mist';
 
-type Screen = 'connect' | 'main';
-type SubmitStage = 'idle' | 'submitting' | 'retry-comment';
+type Screen = 'loading' | 'setup' | 'connected-splash' | 'main' | 'compose' | 'success';
 
-interface ScreenshotState {
-  dataUrl: string;
-  pin: PinCoordinates;
+const label: React.CSSProperties = {
+  font: "600 12px Inter,sans-serif",
+  color: 'var(--color-gray-700)',
+};
+
+const PAT_DOCS_URL = 'https://confluence.atlassian.com/enterprise/using-personal-access-tokens-1026032365.html';
+
+function statusTagVariant(status: string): string {
+  const s = status.toLowerCase();
+  if (/(done|closed|resolved)/.test(s)) return 'success';
+  if (/(blocked|reopen)/.test(s)) return 'critical';
+  return 'info';
 }
 
-const PinLogo = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-    <path
-      d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"
-      fill="var(--color-primary)"
-    />
-    <circle cx="12" cy="9" r="2.5" fill="#fff" />
-  </svg>
-);
+function domainOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
 
 export function App() {
-  const [screen, setScreen] = useState<Screen>('connect');
-  const [checkingStored, setCheckingStored] = useState(true);
+  const [screen, setScreen] = useState<Screen>('loading');
 
-  // Connection state
+  // Connection
   const [baseUrl, setBaseUrl] = useState('');
   const [token, setToken] = useState('');
   const [email, setEmail] = useState('');
   const [useCloudAuth, setUseCloudAuth] = useState(false);
+  const [showToken, setShowToken] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
-  const [displayName, setDisplayName] = useState<string | null>(null);
+  const [instanceDomain, setInstanceDomain] = useState('');
+  const [sessionExpired, setSessionExpired] = useState(false);
 
-  // Ticket state
+  // Ticket
   const [ticketKey, setTicketKey] = useState('');
-  const [detectedKey, setDetectedKey] = useState<string | null>(null);
+  const [detectedChip, setDetectedChip] = useState(false);
   const [ticket, setTicket] = useState<TicketInfo | null>(null);
   const [ticketError, setTicketError] = useState<string | null>(null);
   const [validating, setValidating] = useState(false);
 
-  // Pin/screenshot state
+  // Pin & compose
   const [pinning, setPinning] = useState(false);
   const [pinError, setPinError] = useState<string | null>(null);
-  const [screenshot, setScreenshot] = useState<ScreenshotState | null>(null);
-
-  // Compose state
+  const [screenshot, setScreenshot] = useState<{ dataUrl: string; pin: PinCoordinates } | null>(null);
   const [comment, setComment] = useState('');
-  const [submitStage, setSubmitStage] = useState<SubmitStage>('idle');
-  const [submitError, setSubmitError] = useState<string | null>(null);
-  const [submitSuccess, setSubmitSuccess] = useState(false);
+  const [posting, setPosting] = useState(false);
+  const [postError, setPostError] = useState<string | null>(null);
+  const [postErrorStage, setPostErrorStage] = useState<'attachment' | 'comment' | null>(null);
 
   const validateTimer = useRef<ReturnType<typeof setTimeout>>();
+  const ticketRef = useRef<TicketInfo | null>(null);
+  ticketRef.current = ticket;
 
-  // On mount: check stored connection
+  /* ── boot: restore stored connection ── */
   useEffect(() => {
-    chrome.runtime.sendMessage({ type: 'testConnection' }).then(result => {
-      if (result?.success) {
-        setDisplayName(result.displayName ?? null);
-        setScreen('main');
+    Promise.all([
+      chrome.storage.local.get(['jiraConfig']),
+      chrome.runtime.sendMessage({ type: 'testConnection' }).catch(() => null),
+    ]).then(([stored, result]) => {
+      const cfg = stored.jiraConfig;
+      if (cfg?.baseUrl) {
+        setBaseUrl(cfg.baseUrl);
+        setInstanceDomain(domainOf(cfg.baseUrl));
       }
-      setCheckingStored(false);
-    }).catch(() => setCheckingStored(false));
+      if (result?.success) {
+        setScreen('main');
+      } else if (cfg?.baseUrl) {
+        setScreen('main');
+        setSessionExpired(true);
+      } else {
+        setScreen('setup');
+      }
+    });
   }, []);
 
-  // Listen for worker broadcasts
+  /* ── worker broadcasts ── */
   useEffect(() => {
     const listener = (message: Message) => {
       if (message.type === 'urlTicketDetected') {
-        setDetectedKey(message.key);
+        setTicketKey(prev => {
+          if (prev === message.key) return prev;
+          setDetectedChip(true);
+          return message.key;
+        });
       } else if (message.type === 'screenshotReady') {
         setScreenshot({ dataUrl: message.dataUrl, pin: message.pin });
         setPinning(false);
         setPinError(null);
+        setPostError(null);
+        setPostErrorStage(null);
+        setScreen('compose');
       } else if (message.type === 'pinError') {
         setPinError(message.message);
         setPinning(false);
@@ -83,15 +109,22 @@ export function App() {
     return () => chrome.runtime.onMessage.removeListener(listener);
   }, []);
 
-  // Check current tab for a ticket ID when panel opens
+  /* ── detect ticket in current tab when main opens ── */
   useEffect(() => {
     if (screen !== 'main') return;
     chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
       const match = tab?.url?.match(TICKET_ID_REGEX);
-      if (match) setDetectedKey(match[0]);
+      if (match) {
+        setTicketKey(prev => {
+          if (prev) return prev;
+          setDetectedChip(true);
+          return match[0];
+        });
+      }
     });
   }, [screen]);
 
+  /* ── debounced ticket validation ── */
   const validateTicket = useCallback((key: string) => {
     setTicket(null);
     setTicketError(null);
@@ -102,27 +135,22 @@ export function App() {
       if (result?.success && result.ticket) {
         setTicket(result.ticket);
       } else {
-        setTicketError(result?.error ?? 'Ticket not found');
+        setTicketError(`Ticket ${key} was not found, or you don't have access.`);
       }
     }).catch(() => {
       setValidating(false);
-      setTicketError('Could not reach Jira');
+      setTicketError('Could not reach Jira.');
     });
   }, []);
 
-  // Debounced validation on manual entry
   useEffect(() => {
     clearTimeout(validateTimer.current);
-    validateTimer.current = setTimeout(() => validateTicket(ticketKey.trim().toUpperCase()), 400);
+    const key = ticketKey.trim().toUpperCase();
+    validateTimer.current = setTimeout(() => validateTicket(key), 350);
     return () => clearTimeout(validateTimer.current);
   }, [ticketKey, validateTicket]);
 
-  const applyDetectedKey = () => {
-    if (detectedKey) {
-      setTicketKey(detectedKey);
-      setDetectedKey(null);
-    }
-  };
+  /* ── actions ── */
 
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -138,10 +166,10 @@ export function App() {
       return;
     }
 
-    // Host permission must be requested here (user gesture context)
+    // Host permission must be requested from the panel (user gesture)
     const granted = await chrome.permissions.request({ origins: [`${origin}/*`] }).catch(() => false);
     if (!granted) {
-      setConnectError('Permission to access the Jira domain is required');
+      setConnectError('Permission to access the Jira domain is required.');
       setConnecting(false);
       return;
     }
@@ -155,10 +183,13 @@ export function App() {
 
     setConnecting(false);
     if (result?.success) {
-      setDisplayName(result.displayName ?? null);
-      setScreen('main');
+      setInstanceDomain(domainOf(baseUrl.trim()));
+      setSessionExpired(false);
+      setToken('');
+      setScreen('connected-splash');
+      setTimeout(() => setScreen('main'), 1400);
     } else {
-      setConnectError(result?.error ?? 'Connection failed');
+      setConnectError(result?.error ?? `Could not reach ${domainOf(baseUrl)}. Check the URL and that your token has read/write scope.`);
     }
   };
 
@@ -167,30 +198,38 @@ export function App() {
     setPinning(true);
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) {
-      setPinError('No active tab found');
+      setPinError('No active tab found.');
       setPinning(false);
       return;
     }
     const result = await chrome.runtime.sendMessage({ type: 'startPinMode', tabId: tab.id })
       .catch(err => ({ success: false, error: String(err) }));
     if (!result?.success) {
-      setPinError(result?.error ?? "Pins can't be placed on this page");
+      setPinError(result?.error ?? "Pins can't be placed on this page.");
       setPinning(false);
     }
-    // On success, we wait for the screenshotReady broadcast
   };
 
-  const handleCancelPin = () => {
+  const handleCancelCompose = () => {
     chrome.runtime.sendMessage({ type: 'cancelPin' }).catch(() => {});
     setScreenshot(null);
-    setPinning(false);
-    setPinError(null);
+    setComment('');
+    setPostError(null);
+    setPostErrorStage(null);
+    setScreen('main');
   };
 
-  const handleSubmit = async () => {
+  const handleRetake = () => {
+    chrome.runtime.sendMessage({ type: 'cancelPin' }).catch(() => {});
+    setScreenshot(null);
+    setScreen('main');
+    void handleDropPin();
+  };
+
+  const handlePost = async () => {
     if (!ticket || !screenshot) return;
-    setSubmitError(null);
-    setSubmitStage('submitting');
+    setPostError(null);
+    setPosting(true);
 
     const result = await chrome.runtime.sendMessage({
       type: 'submit',
@@ -200,243 +239,396 @@ export function App() {
       pin: screenshot.pin,
     }).catch(err => ({ success: false, error: String(err) }));
 
+    setPosting(false);
     if (result?.success) {
-      setSubmitStage('idle');
-      setSubmitSuccess(true);
       setScreenshot(null);
       setComment('');
-      setTimeout(() => setSubmitSuccess(false), 4000);
+      setScreen('success');
     } else {
-      setSubmitStage(result?.stage === 'comment' ? 'retry-comment' : 'idle');
-      setSubmitError(result?.error ?? 'Submission failed');
+      if (String(result?.error ?? '').includes('401')) {
+        setSessionExpired(true);
+        setScreen('main');
+        return;
+      }
+      setPostError(result?.error ?? 'Something went wrong while posting.');
+      setPostErrorStage(result?.stage ?? null);
     }
   };
 
-  const handleDisconnect = () => {
-    chrome.storage.local.remove('jiraConfig');
-    setScreen('connect');
-    setDisplayName(null);
-    setTicket(null);
-    setScreenshot(null);
+  const handleAddAnotherPin = () => {
+    setScreen('main');
+    void handleDropPin();
   };
 
-  if (checkingStored) {
+  const openSettings = () => {
+    setConnectError(null);
+    setScreen('setup');
+  };
+
+  const maximizeScreenshot = () => {
+    if (screenshot) chrome.tabs.create({ url: screenshot.dataUrl });
+  };
+
+  /* ── shared chrome ── */
+
+  const Header = (
+    <div style={{
+      height: 44, padding: '0 12px 0 16px', display: 'flex', alignItems: 'center', gap: 8,
+      borderBottom: '1px solid var(--color-gray-200)', background: 'var(--color-gray-50)', flexShrink: 0,
+    }}>
+      <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--color-green-400)', flex: 'none' }} />
+      <span style={{
+        fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--color-gray-700)',
+        flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        {instanceDomain}
+      </span>
+      <IconButton icon="Settings" size="sm" aria-label="Settings" onClick={openSettings} />
+    </div>
+  );
+
+  /* ── screens ── */
+
+  if (screen === 'loading') {
     return (
-      <div className="panel">
-        <div className="empty-state" style={{ marginTop: 80 }}>
-          <div className="spinner spinner-dark" />
-          <span>Loading…</span>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
+        <Spinner light={false} size={20} />
+      </div>
+    );
+  }
+
+  if (screen === 'setup') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+        <div style={{ padding: '48px 24px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, textAlign: 'center' }}>
+          <div style={{
+            width: 48, height: 48, borderRadius: 10,
+            background: 'linear-gradient(180deg,var(--color-nav-grade-top),var(--color-nav-grade-bottom))',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
+          }}>
+            <Icon name="MapPin" size={26} />
+          </div>
+          <div style={{ font: '700 18px Inter,sans-serif', color: 'var(--color-gray-800)' }}>PinPoint for Jira</div>
+          <div style={{ fontSize: 13, lineHeight: '20px', color: 'var(--color-gray-600)', maxWidth: 280 }}>
+            Pin feedback to any webpage and post it straight to a Jira ticket.
+          </div>
+        </div>
+
+        <form onSubmit={handleConnect} style={{ padding: '32px 24px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {connectError && (
+            <Alert status="error" title="Connection failed">{connectError}</Alert>
+          )}
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <label style={label}>Jira instance URL</label>
+            <Input
+              type="url"
+              placeholder="https://jira.mycompany.com"
+              leftIcon="LucideLink2"
+              value={baseUrl}
+              onChange={e => setBaseUrl(e.target.value)}
+              isDisabled={connecting}
+              isInvalid={!!connectError}
+              required
+            />
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+              <label style={label}>{useCloudAuth ? 'API token' : 'Personal Access Token'}</label>
+              <a href={PAT_DOCS_URL} target="_blank" rel="noreferrer" style={{ fontSize: 11 }}>Where do I find this?</a>
+            </div>
+            <Input
+              type={showToken ? 'text' : 'password'}
+              placeholder="••••••••••••••••"
+              leftIcon="Lock"
+              rightIcon={
+                <span onClick={() => setShowToken(v => !v)} style={{ display: 'inline-flex', cursor: 'pointer' }}>
+                  <Icon name="Eye" size={16} />
+                </span>
+              }
+              value={token}
+              onChange={e => setToken(e.target.value)}
+              isDisabled={connecting}
+              required
+            />
+          </div>
+
+          {useCloudAuth && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label style={label}>Email</label>
+              <Input
+                type="email"
+                placeholder="you@company.com"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                isDisabled={connecting}
+                required
+              />
+            </div>
+          )}
+
+          <Button type="submit" size="md" variant="solid" colorScheme="primary" style={{ width: '100%' }} isDisabled={connecting}>
+            {connecting ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Spinner />Connecting…</span>
+            ) : connectError ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Icon name="RefreshCw" size={14} />Retry connection</span>
+            ) : 'Connect'}
+          </Button>
+
+          <div style={{ fontSize: 11, lineHeight: '16px', color: 'var(--color-gray-500)', textAlign: 'center' }}>
+            Your token is stored locally in this browser and only sent to your Jira instance.
+          </div>
+
+          <div style={{ textAlign: 'center' }}>
+            <a href="#" onClick={e => { e.preventDefault(); setUseCloudAuth(v => !v); }} style={{ fontSize: 11 }}>
+              {useCloudAuth ? 'Using Data Center? Switch to a Personal Access Token' : 'Using Jira Cloud? Switch to email + API token'}
+            </a>
+          </div>
+        </form>
+      </div>
+    );
+  }
+
+  if (screen === 'connected-splash') {
+    return (
+      <div style={{ padding: '48px 24px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, textAlign: 'center', minHeight: '100vh', justifyContent: 'center' }}>
+        <span style={{ color: 'var(--color-green-500)' }}><Icon name="CircleCheckSolid" size={40} /></span>
+        <div style={{ font: '600 15px Inter,sans-serif', color: 'var(--color-gray-800)' }}>Connected to {instanceDomain}</div>
+        <div style={{ fontSize: 12, color: 'var(--color-gray-500)' }}>Taking you to the main screen…</div>
+      </div>
+    );
+  }
+
+  if (screen === 'success') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+        {Header}
+        <div style={{ padding: '56px 24px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, textAlign: 'center', flex: 1, justifyContent: 'center' }}>
+          <span style={{ color: 'var(--color-green-500)' }}><Icon name="CircleCheckSolid" size={44} /></span>
+          <div style={{ font: '600 15px Inter,sans-serif', color: 'var(--color-gray-800)' }}>
+            Comment posted to {ticket?.key ?? 'Jira'}
+          </div>
+          {ticket && (
+            <a href={ticket.url} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+              View in Jira <Icon name="ExternalLink" size={14} />
+            </a>
+          )}
+          <Button size="md" variant="outline" colorScheme="primary" style={{ marginTop: 12 }} onClick={handleAddAnotherPin}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Icon name="MapPin" size={15} />Add another pin</span>
+          </Button>
         </div>
       </div>
     );
   }
 
-  return (
-    <div className="panel">
-      <header className="panel-header">
-        <div className="brand">
-          <PinLogo />
-          Nitpick
+  if (screen === 'compose' && screenshot) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+        {Header}
+        <div style={{ padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--color-gray-200)' }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 500, color: 'var(--color-blue-600)' }}>{ticket?.key}</span>
+          <span style={{ fontSize: 12, color: 'var(--color-gray-600)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {ticket?.summary}
+          </span>
+          {ticket && <StatusTag variant={statusTagVariant(ticket.status)}>{ticket.status}</StatusTag>}
         </div>
-        {screen === 'main' && displayName && (
-          <div className="header-user">
-            <span className="dot" />
-            {displayName}
+
+        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1 }}>
+          {postError && (
+            <>
+              <Alert status="error" title="Couldn't post comment">
+                {postError}
+                {postErrorStage === 'comment' && ' Retry will only re-post the comment — the screenshot is already attached.'}
+              </Alert>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <Button size="sm" variant="ghost" colorScheme="neutral" onClick={() => setPostError(null)}>Dismiss</Button>
+                <Button size="sm" variant="solid" colorScheme="error" onClick={handlePost}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icon name="RefreshCw" size={12} />Retry</span>
+                </Button>
+              </div>
+              <div style={{ borderTop: '1px solid var(--color-gray-200)', paddingTop: 12, fontSize: 11, color: 'var(--color-gray-500)' }}>
+                Your comment and screenshot are kept until the post succeeds.
+              </div>
+            </>
+          )}
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ position: 'relative', aspectRatio: '16/10', borderRadius: 6, overflow: 'hidden', boxShadow: 'inset 0 0 0 1px var(--color-gray-300)', background: 'var(--color-gray-50)', opacity: posting ? 0.6 : 1 }}>
+              <img src={screenshot.dataUrl} alt="Screenshot with pin" style={{ display: 'block', width: '100%', height: '100%', objectFit: 'contain' }} />
+              <div
+                onClick={maximizeScreenshot}
+                title="Open full size"
+                style={{
+                  position: 'absolute', top: 6, right: 6, width: 24, height: 24, borderRadius: 4,
+                  background: 'rgba(26,32,44,.6)', color: '#fff',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                }}
+              >
+                <Icon name="Maximize2" size={13} />
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 11, color: 'var(--color-gray-500)' }}>Screenshot · pin 1</span>
+              <Button size="sm" variant="ghost" colorScheme="primary" onClick={handleRetake} isDisabled={posting}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icon name="RefreshCw" size={12} />Retake</span>
+              </Button>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
+            <label style={label}>Comment</label>
+            <Textarea
+              rows={4}
+              placeholder="Describe the issue or feedback…"
+              value={comment}
+              onChange={e => setComment(e.target.value)}
+              isDisabled={posting}
+            />
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', borderTop: '1px solid var(--color-gray-200)', paddingTop: 12 }}>
+            <Button size="md" variant="outline" colorScheme="neutral" onClick={handleCancelCompose} isDisabled={posting}>Cancel</Button>
+            <Button size="md" variant="solid" colorScheme="primary" onClick={handlePost} isDisabled={posting || !ticket}>
+              {posting ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Spinner size={13} />Posting…</span>
+              ) : `Post to ${ticket?.key ?? 'Jira'}`}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* main */
+  const ticketInvalid = !!ticketError;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+      {Header}
+
+      {sessionExpired && (
+        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12, borderBottom: '1px solid var(--color-gray-200)' }}>
+          <Alert status="warning" title="Session expired">
+            Your Personal Access Token is no longer valid. Reconnect to keep posting feedback.
+          </Alert>
+          <Button size="md" variant="solid" colorScheme="primary" style={{ width: '100%' }} onClick={openSettings}>
+            Reconnect to {instanceDomain}
+          </Button>
+        </div>
+      )}
+
+      <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8, borderBottom: '1px solid var(--color-gray-200)' }}>
+        <label style={label}>Jira ticket</label>
+        <Input
+          placeholder="MIST-12345"
+          leftIcon="TextSearch"
+          value={ticketKey}
+          onChange={e => { setTicketKey(e.target.value.toUpperCase()); setDetectedChip(false); }}
+          isInvalid={ticketInvalid}
+          inputStyle={{ fontFamily: 'var(--font-mono)' }}
+          spellCheck={false}
+          autoComplete="off"
+        />
+
+        {detectedChip && (
+          <div style={{ display: 'flex' }}>
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              background: 'var(--color-blue-50)', color: 'var(--color-blue-700)',
+              borderRadius: 9999, padding: '2px 6px 2px 10px',
+              fontSize: 11, fontFamily: 'Inter,sans-serif', fontWeight: 500,
+            }}>
+              <Icon name="LucideLink2" size={12} />
+              Detected from page URL
+              <span
+                onClick={() => setDetectedChip(false)}
+                style={{ display: 'inline-flex', padding: 2, borderRadius: '50%', cursor: 'pointer', color: 'var(--color-blue-600)' }}
+              >
+                <Icon name="X" size={12} />
+              </span>
+            </span>
           </div>
         )}
-      </header>
 
-      <div className="panel-body">
-        {screen === 'connect' ? (
-          <form className="card" onSubmit={handleConnect}>
-            <div className="card-title">Connect to Jira</div>
+        {validating && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--color-gray-500)' }}>
+            <Spinner light={false} size={12} /> Looking up ticket…
+          </div>
+        )}
 
-            <div className="field">
-              <label htmlFor="baseUrl">Jira base URL</label>
-              <input
-                id="baseUrl"
-                type="url"
-                placeholder="https://jira.mycompany.com"
-                value={baseUrl}
-                onChange={e => setBaseUrl(e.target.value)}
-                required
-              />
+        {ticketError && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--color-error-default)' }}>
+            <Icon name="TriangleAlert" size={14} />
+            {ticketError}
+          </div>
+        )}
+
+        {ticket && (
+          <div style={{
+            border: '1px solid var(--color-gray-200)', borderRadius: 6, padding: '10px 12px',
+            display: 'flex', flexDirection: 'column', gap: 6, background: 'var(--color-gray-50)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 500, color: 'var(--color-blue-600)' }}>{ticket.key}</span>
+              <StatusTag variant={statusTagVariant(ticket.status)}>{ticket.status}</StatusTag>
+              <span style={{ flex: 1 }} />
+              {ticket.assignee && <Avatar name={ticket.assignee} size={20} />}
             </div>
-
-            <div className="field">
-              <label htmlFor="token">{useCloudAuth ? 'API token' : 'Personal Access Token'}</label>
-              <input
-                id="token"
-                type="password"
-                placeholder={useCloudAuth ? 'Jira Cloud API token' : 'PAT from your Jira profile'}
-                value={token}
-                onChange={e => setToken(e.target.value)}
-                required
-              />
-              <span className="hint">
-                {useCloudAuth
-                  ? 'Cloud instances use email + API token'
-                  : 'Data Center 8.14+: create one under Profile → Personal Access Tokens'}
-              </span>
+            <div style={{ fontSize: 12, color: 'var(--color-gray-700)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {ticket.summary}
             </div>
+          </div>
+        )}
+      </div>
 
-            {useCloudAuth && (
-              <div className="field">
-                <label htmlFor="email">Email</label>
-                <input
-                  id="email"
-                  type="email"
-                  placeholder="you@company.com"
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  required
-                />
-              </div>
-            )}
+      <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {pinError && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--color-error-default)' }}>
+            <Icon name="TriangleAlert" size={14} />
+            {pinError}
+          </div>
+        )}
+        <Button
+          size="lg"
+          variant="solid"
+          colorScheme="primary"
+          style={{ width: '100%' }}
+          isDisabled={!ticket || pinning || sessionExpired}
+          onClick={handleDropPin}
+        >
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            {pinning ? <Spinner size={16} /> : <Icon name="MapPin" size={18} />}
+            {pinning ? 'Click the page to place…' : 'Drop a pin'}
+          </span>
+        </Button>
+        <div style={{ fontSize: 12, lineHeight: '18px', color: 'var(--color-gray-500)', textAlign: 'center' }}>
+          {!ticket && !validating
+            ? 'Enter a valid ticket to start pinning.'
+            : pinning
+              ? 'Click anywhere on the page to place a pin. Press Esc to cancel.'
+              : 'Click anywhere on the page to place a pin and capture a screenshot.'}
+        </div>
+      </div>
 
-            {connectError && <div className="banner banner-error" style={{ marginBottom: 12 }}>{connectError}</div>}
-
-            <button className="btn btn-primary" type="submit" disabled={connecting}>
-              {connecting ? <><span className="spinner" /> Connecting…</> : 'Connect'}
-            </button>
-
-            <div style={{ marginTop: 10, textAlign: 'center' }}>
-              <button
-                type="button"
-                className="settings-link"
-                onClick={() => setUseCloudAuth(v => !v)}
-              >
-                {useCloudAuth ? 'Using a Data Center instance? Switch to PAT' : 'Using Jira Cloud? Switch to email + API token'}
-              </button>
+      <div style={{
+        flex: 1, margin: '0 16px 16px', border: '1px dashed var(--color-gray-300)', borderRadius: 6,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        gap: 8, color: 'var(--color-gray-400)', minHeight: 180,
+      }}>
+        {pinning ? (
+          <>
+            <PinMarker n={1} size={26} />
+            <div style={{ fontSize: 12, color: 'var(--color-gray-500)', marginTop: 8 }}>Waiting for your click…</div>
+            <div style={{ fontSize: 11, color: 'var(--color-gray-400)', maxWidth: 220, textAlign: 'center' }}>
+              Switch to the page and click where the issue is.
             </div>
-          </form>
+          </>
         ) : (
           <>
-            {/* Ticket section */}
-            <div className="card">
-              <div className="card-title">Ticket</div>
-
-              {detectedKey && detectedKey !== ticketKey && (
-                <div style={{ marginBottom: 10 }}>
-                  <button type="button" className="chip" onClick={applyDetectedKey} style={{ border: 'none', cursor: 'pointer' }}>
-                    Detected on this page: {detectedKey} — use it
-                  </button>
-                </div>
-              )}
-
-              <div className="field">
-                <label htmlFor="ticketKey">Ticket ID</label>
-                <input
-                  id="ticketKey"
-                  type="text"
-                  placeholder="MIST-12345"
-                  value={ticketKey}
-                  onChange={e => setTicketKey(e.target.value.toUpperCase())}
-                  spellCheck={false}
-                  autoComplete="off"
-                />
-              </div>
-
-              {validating && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--color-text-tertiary)', fontSize: 12 }}>
-                  <span className="spinner spinner-dark" /> Looking up ticket…
-                </div>
-              )}
-
-              {ticketError && <div className="banner banner-error">{ticketError}</div>}
-
-              {ticket && (
-                <div className="ticket-card">
-                  <span className="ticket-key">{ticket.key}</span>
-                  <span className="ticket-summary">{ticket.summary}</span>
-                  <div className="ticket-meta">
-                    <span className="ticket-status">{ticket.status}</span>
-                    {ticket.assignee && <span>Assignee: {ticket.assignee}</span>}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Pin & screenshot section */}
-            <div className="card">
-              <div className="card-title">Pin &amp; Screenshot</div>
-
-              {pinError && <div className="banner banner-error" style={{ marginBottom: 10 }}>{pinError}</div>}
-
-              {!screenshot ? (
-                <>
-                  {pinning ? (
-                    <div className="empty-state">
-                      <div className="spinner spinner-dark" />
-                      <span>Click anywhere on the page to drop a pin.<br />Press Esc to cancel.</span>
-                      <button className="btn btn-ghost" type="button" onClick={handleCancelPin}>Cancel</button>
-                    </div>
-                  ) : (
-                    <button className="btn btn-primary" type="button" onClick={handleDropPin}>
-                      <PinLogo /> Drop a pin
-                    </button>
-                  )}
-                </>
-              ) : (
-                <>
-                  <div className="screenshot-preview" style={{ marginBottom: 12 }}>
-                    <img src={screenshot.dataUrl} alt="Screenshot with pin" />
-                    <span className="pin-coords">
-                      ({Math.round(screenshot.pin.x)}, {Math.round(screenshot.pin.y)})
-                    </span>
-                  </div>
-
-                  <div className="field">
-                    <label htmlFor="comment">Comment</label>
-                    <textarea
-                      id="comment"
-                      placeholder="Describe the issue at this pin…"
-                      value={comment}
-                      onChange={e => setComment(e.target.value)}
-                    />
-                  </div>
-
-                  {submitError && (
-                    <div className="banner banner-warning" style={{ marginBottom: 10 }}>
-                      {submitError}
-                      {submitStage === 'retry-comment' && ' — the screenshot is already attached; retrying will only re-post the comment.'}
-                    </div>
-                  )}
-
-                  <div className="btn-row">
-                    <button className="btn btn-secondary" type="button" onClick={handleCancelPin} disabled={submitStage === 'submitting'}>
-                      Discard
-                    </button>
-                    <button
-                      className="btn btn-primary"
-                      type="button"
-                      onClick={handleSubmit}
-                      disabled={!ticket || submitStage === 'submitting'}
-                    >
-                      {submitStage === 'submitting'
-                        ? <><span className="spinner" /> Sending…</>
-                        : submitStage === 'retry-comment' ? 'Retry comment' : 'Send to Jira'}
-                    </button>
-                  </div>
-                  {!ticket && (
-                    <div className="hint" style={{ marginTop: 8, fontSize: 11, color: 'var(--color-text-tertiary)' }}>
-                      Select a valid ticket above to enable sending.
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-
-            {submitSuccess && (
-              <div className="banner banner-success">
-                Pin sent to {ticket?.key ?? 'Jira'} — screenshot attached and comment posted.
-              </div>
-            )}
-
-            <div style={{ textAlign: 'center', marginTop: 'auto', paddingTop: 8 }}>
-              <button type="button" className="settings-link" onClick={handleDisconnect}>
-                Disconnect from Jira
-              </button>
+            <Icon name="MapPinned" size={28} />
+            <div style={{ fontSize: 12, color: 'var(--color-gray-500)' }}>No pins yet</div>
+            <div style={{ fontSize: 11, color: 'var(--color-gray-400)', maxWidth: 220, textAlign: 'center' }}>
+              Your pinned screenshot and comment will appear here.
             </div>
           </>
         )}

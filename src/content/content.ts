@@ -68,19 +68,7 @@ function init(): void {
     const { clientX, clientY } = event;
     const dpr = window.devicePixelRatio;
 
-    pinElement = document.createElement('div');
-    pinElement.id = '__nitpick-pin-marker';
-    pinElement.innerHTML = getPinSVG();
-    pinElement.style.cssText = `
-      position: fixed;
-      left: ${clientX - 12}px;
-      top: ${clientY - 24}px;
-      z-index: 2147483646;
-      width: 24px;
-      height: 24px;
-      pointer-events: none;
-    `;
-
+    pinElement = buildPinMarker(clientX, clientY);
     document.documentElement.appendChild(pinElement);
     removeOverlay();
 
@@ -103,12 +91,57 @@ function init(): void {
     if (stale) stale.remove();
   }
 
-  function getPinSVG(): string {
-    return `
-      <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="24" height="24">
-        <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" fill="#E5484D" stroke="#FFFFFF" stroke-width="1.5"/>
-        <circle cx="12" cy="9" r="2.5" fill="#FFFFFF"/>
-      </svg>
+  // Numbered teardrop marker from the Mist design spec ("Placed" state):
+  // red-500 body, white 2px ring, soft red halo — legible on light and
+  // dark pages. The tip of the teardrop lands on the click point.
+  function buildPinMarker(x: number, y: number): HTMLElement {
+    const wrapper = document.createElement('div');
+    wrapper.id = '__nitpick-pin-marker';
+    wrapper.style.cssText = `
+      position: fixed;
+      left: ${x - 18}px;
+      top: ${y - 38}px;
+      width: 36px;
+      height: 36px;
+      z-index: 2147483646;
+      pointer-events: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     `;
+
+    const halo = document.createElement('span');
+    halo.style.cssText = `
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      background: rgba(229,62,62,.18);
+    `;
+
+    const pin = document.createElement('div');
+    pin.style.cssText = `
+      width: 28px;
+      height: 28px;
+      background: rgb(229,62,62);
+      border-radius: 50% 50% 50% 0;
+      transform: rotate(-45deg);
+      box-shadow: 0 0 0 2px #fff, 0 2px 6px rgba(0,0,0,.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    `;
+
+    const badge = document.createElement('span');
+    badge.textContent = '1';
+    badge.style.cssText = `
+      transform: rotate(45deg);
+      color: #fff;
+      font: 700 12px Inter, sans-serif;
+    `;
+
+    pin.appendChild(badge);
+    wrapper.appendChild(halo);
+    wrapper.appendChild(pin);
+    return wrapper;
   }
 }
