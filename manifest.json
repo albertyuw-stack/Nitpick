@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Nitpick - Jira Screenshot Comments",
+  "version": "1.0.0",
+  "description": "Pin screenshots directly on web pages and send them to Jira tickets as comments",
+  "permissions": [
+    "sidePanel",
+    "activeTab",
+    "scripting",
+    "storage",
+    "tabs"
+  ],
+  "optional_host_permissions": [
+    "https://*/*"
+  ],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "Open Nitpick"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  }
+}
