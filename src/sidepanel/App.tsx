@@ -203,23 +203,23 @@ export function App() {
       return;
     }
 
-    // Injection and captureVisibleTab need host access for the page's
-    // origin. activeTab doesn't cover side-panel clicks, so ask for the
-    // site on first pin (one-time Chrome prompt per origin).
-    let origin: string;
+    // captureVisibleTab requires activeTab or effective all-hosts access
+    // (Chromium's kActiveTabOrAllUrls check) — a single-origin grant lets
+    // us inject the overlay but not capture the screenshot. activeTab
+    // isn't granted for side-panel clicks, so request the wildcard hosts
+    // once (one-time Chrome prompt).
     try {
       const url = new URL(tab.url);
       if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('restricted');
-      origin = url.origin;
     } catch {
       setPinError("Pins can't be placed on this page.");
       setPinning(false);
       return;
     }
 
-    const granted = await chrome.permissions.request({ origins: [`${origin}/*`] }).catch(() => false);
+    const granted = await chrome.permissions.request({ origins: ['https://*/*', 'http://*/*'] }).catch(() => false);
     if (!granted) {
-      setPinError('Nitpick needs access to this site to place pins. Click "Drop a pin" again and allow it.');
+      setPinError('Chrome needs site access to capture screenshots. Click "Drop a pin" again and choose Allow.');
       setPinning(false);
       return;
     }

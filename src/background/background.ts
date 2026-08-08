@@ -82,8 +82,10 @@ async function handleMessage(message: Message, senderTabId?: number): Promise<an
         });
         return { success: true };
       } catch (error) {
-        broadcastToPanel({ type: 'pinError', message: 'Failed to capture screenshot' });
-        return { success: false, error: String(error) };
+        cleanupPin();
+        const detail = error instanceof Error ? error.message : String(error);
+        broadcastToPanel({ type: 'pinError', message: `Failed to capture screenshot: ${detail}` });
+        return { success: false, error: detail };
       }
     }
 
