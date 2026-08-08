@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Message, PinCoordinates, TicketInfo, TICKET_ID_REGEX } from '@/shared/types';
-import { DEFAULT_TICKET_PATTERN, loadTicketRegex } from '@/shared/ticket-pattern';
+import { buildProjectRegex, loadTicketRegex } from '@/shared/ticket-pattern';
 import { Alert, Avatar, Button, Icon, IconButton, Input, PinMarker, Spinner, StatusTag, Textarea } from './mist';
 
 type Screen = 'loading' | 'setup' | 'connected-splash' | 'main' | 'compose' | 'success';
@@ -42,8 +42,8 @@ export function App() {
   const [sessionExpired, setSessionExpired] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
 
-  // Settings
-  const [pattern, setPattern] = useState(DEFAULT_TICKET_PATTERN);
+  // Settings — optional Jira space key used for ticket-ID scanning
+  const [pattern, setPattern] = useState('');
   const [patternError, setPatternError] = useState<string | null>(null);
 
   // Ticket
@@ -71,11 +71,11 @@ export function App() {
   /* ── boot: restore stored connection + settings ── */
   useEffect(() => {
     Promise.all([
-      chrome.storage.local.get(['jiraConfig', 'ticketPattern']),
+      chrome.storage.local.get(['jiraConfig', 'ticketProject']),
       chrome.runtime.sendMessage({ type: 'testConnection' }).catch(() => null),
     ]).then(([stored, result]) => {
       const cfg = stored.jiraConfig;
-      if (stored.ticketPattern) setPattern(stored.ticketPattern);
+      if (stored.ticketProject) setPattern(stored.ticketProject);
       if (cfg?.baseUrl) {
         setBaseUrl(cfg.baseUrl);
         setInstanceDomain(domainOf(cfg.baseUrl));
@@ -144,10 +144,9 @@ export function App() {
     if (!key) return;
     let plausible = TICKET_ID_REGEX.test(key);
     if (!plausible) {
-      try {
-        plausible = new RegExp(pattern).test(key);
-      } catch {
-        // Invalid custom pattern — default check already ran
+      const projectRe = buildProjectRegex(pattern);
+      if (projectRe) {
+        plausible = new RegExp(`^(?:${projectRe.source})$`, 'i').test(key);
       }
     }
     if (!plausible) return;
@@ -362,25 +361,19 @@ export function App() {
   };
 
   const handlePatternChange = (value: string) => {
-    setPattern(value);
-    if (!value.trim() || value === DEFAULT_TICKET_PATTERN) {
+    const key = value.toUpperCase();
+    setPattern(key);
+    if (!key.trim()) {
       setPatternError(null);
-      chrome.storage.local.remove('ticketPattern').catch(() => {});
+      chrome.storage.local.remove('ticketProject').catch(() => {});
       return;
     }
-    try {
-      new RegExp(value);
-      setPatternError(null);
-      chrome.storage.local.set({ ticketPattern: value }).catch(() => {});
-    } catch {
-      setPatternError('Not a valid regular expression — the default pattern is used instead.');
+    if (!/^[A-Z][A-Z0-9]*-?$/.test(key.trim())) {
+      setPatternError('Use your Jira space key — letters and numbers, e.g. MIST-');
+      return;
     }
-  };
-
-  const resetPattern = () => {
-    setPattern(DEFAULT_TICKET_PATTERN);
     setPatternError(null);
-    chrome.storage.local.remove('ticketPattern').catch(() => {});
+    chrome.storage.local.set({ ticketProject: key.trim() }).catch(() => {});
   };
 
   const maximizeScreenshot = () => {
@@ -530,12 +523,10 @@ export function App() {
           <div style={{ borderTop: '1px solid var(--color-gray-200)', paddingTop: 16, display: 'flex', flexDirection: 'column', gap: 6 }}>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
               <label style={label}>Ticket ID scan pattern</label>
-              {pattern !== DEFAULT_TICKET_PATTERN && (
-                <a href="#" onClick={e => { e.preventDefault(); resetPattern(); }} style={{ fontSize: 11 }}>Reset to default</a>
-              )}
+              <span style={{ fontSize: 11, color: 'var(--color-gray-400)' }}>Optional</span>
             </div>
             <Input
-              placeholder={DEFAULT_TICKET_PATTERN}
+              placeholder="e.g. MIST-"
               leftIcon="TextSearch"
               value={pattern}
               onChange={e => handlePatternChange(e.target.value)}
@@ -551,7 +542,7 @@ export function App() {
               </div>
             ) : (
               <div style={{ fontSize: 11, lineHeight: '16px', color: 'var(--color-gray-500)' }}>
-                Regular expression used to find ticket IDs in page URLs, tab titles, and page content.
+                This is for the extension to automatically map the Jira ticket if your prototype webpage's URL contains the related Jira ID. It should be the name of your Jira space.
               </div>
             )}
           </div>
