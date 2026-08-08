@@ -46,6 +46,8 @@ export function App() {
   const [ticket, setTicket] = useState<TicketInfo | null>(null);
   const [ticketError, setTicketError] = useState<string | null>(null);
   const [validating, setValidating] = useState(false);
+  const [rescanning, setRescanning] = useState(false);
+  const [scanNote, setScanNote] = useState<string | null>(null);
 
   // Pin & compose
   const [pinning, setPinning] = useState(false);
@@ -273,6 +275,47 @@ export function App() {
       }
       setPostError(result?.error ?? 'Something went wrong while posting.');
       setPostErrorStage(result?.stage ?? null);
+    }
+  };
+
+  const handleRescan = async () => {
+    if (rescanning) return;
+    setScanNote(null);
+    setRescanning(true);
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      let found = tab?.url?.match(TICKET_ID_REGEX)?.[0]
+        ?? tab?.title?.match(TICKET_ID_REGEX)?.[0]
+        ?? null;
+
+      // Fall back to scanning the page content itself (title + visible
+      // text). Fails silently on restricted pages or without host access.
+      if (!found && tab?.id) {
+        try {
+          const results = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: (source: string) => {
+              const re = new RegExp(source);
+              return document.title.match(re)?.[0]
+                ?? document.body?.innerText.match(re)?.[0]
+                ?? null;
+            },
+            args: [TICKET_ID_REGEX.source],
+          });
+          found = (results[0]?.result as string | null) ?? null;
+        } catch {
+          // Restricted page — URL/title scan already covered what we can
+        }
+      }
+
+      if (found) {
+        setTicketKey(found);
+        setDetectedChip(true);
+      } else {
+        setScanNote('No Jira ticket ID found on this page.');
+      }
+    } finally {
+      setRescanning(false);
     }
   };
 
@@ -543,8 +586,17 @@ export function App() {
         <Input
           placeholder="MIST-12345"
           leftIcon="TextSearch"
+          rightIcon={
+            <span
+              onClick={handleRescan}
+              title="Rescan the page for a ticket ID"
+              style={{ display: 'inline-flex', cursor: 'pointer', color: 'var(--color-blue-500)' }}
+            >
+              {rescanning ? <Spinner light={false} size={14} /> : <Icon name="RefreshCw" size={14} />}
+            </span>
+          }
           value={ticketKey}
-          onChange={e => { setTicketKey(e.target.value.toUpperCase()); setDetectedChip(false); }}
+          onChange={e => { setTicketKey(e.target.value.toUpperCase()); setDetectedChip(false); setScanNote(null); }}
           isInvalid={ticketInvalid}
           inputStyle={{ fontFamily: 'var(--font-mono)' }}
           spellCheck={false}
@@ -568,6 +620,13 @@ export function App() {
                 <Icon name="X" size={12} />
               </span>
             </span>
+          </div>
+        )}
+
+        {scanNote && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--color-gray-500)' }}>
+            <Icon name="TextSearch" size={14} />
+            {scanNote}
           </div>
         )}
 
