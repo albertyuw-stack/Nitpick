@@ -1,0 +1,88 @@
+/* ── Mist Design System tokens (subset used by PinPoint) ──────────────
+   Transcribed from _ds/mist-design-system/tokens/fig-tokens.css +
+   typography.css. Values are verbatim from the Figma variables. */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Open+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
+
+:root {
+  --color-gray-50: rgb(247, 250, 252);
+  --color-gray-100: rgb(237, 242, 247);
+  --color-gray-200: rgb(226, 232, 240);
+  --color-gray-300: rgb(203, 213, 224);
+  --color-gray-400: rgb(160, 174, 192);
+  --color-gray-500: rgb(113, 128, 150);
+  --color-gray-600: rgb(74, 85, 104);
+  --color-gray-700: rgb(45, 55, 72);
+  --color-gray-800: rgb(26, 32, 44);
+
+  --color-blue-50: rgb(235, 248, 255);
+  --color-blue-100: rgb(190, 227, 248);
+  --color-blue-400: rgb(66, 153, 225);
+  --color-blue-500: rgb(49, 130, 206);
+  --color-blue-600: rgb(43, 108, 176);
+  --color-blue-700: rgb(44, 82, 130);
+
+  --color-red-50: rgb(255, 245, 245);
+  --color-red-400: rgb(245, 101, 101);
+  --color-red-500: rgb(229, 62, 62);
+  --color-red-600: rgb(197, 48, 48);
+  --color-red-700: rgb(155, 44, 44);
+
+  --color-green-50: rgb(240, 255, 244);
+  --color-green-400: rgb(72, 187, 120);
+  --color-green-500: rgb(56, 161, 105);
+  --color-green-600: rgb(37, 133, 90);
+
+  --color-orange-50: rgb(255, 250, 240);
+  --color-orange-400: rgb(237, 137, 54);
+  --color-orange-500: rgb(221, 107, 32);
+  --color-orange-600: rgb(192, 86, 33);
+
+  --color-error-default: var(--color-red-600);
+  --color-black-white-white: rgb(255, 255, 255);
+
+  --color-nav-grade-top: rgb(8, 81, 135);
+  --color-nav-grade-bottom: rgb(22, 144, 185);
+
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+  --radius-xl: 8px;
+  --radius-full: 9999px;
+
+  --font-sans: Inter, 'Open Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-body: 'Open Sans', Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'DM Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--color-black-white-white);
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--color-gray-700);
+}
+
+a {
+  color: var(--color-blue-600);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--color-blue-700);
+  text-decoration: underline;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+@keyframes pp-spin {
+  to { transform: rotate(360deg); }
+}

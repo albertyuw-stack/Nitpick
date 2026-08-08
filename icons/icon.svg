@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#16395E"/>
+      <stop offset="1" stop-color="#2E82D8"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="26" fill="url(#bg)"/>
+  <!-- White map pin -->
+  <path d="M64 114 C 57 105 25 73 25 53 A 39 39 0 1 1 103 53 C 103 73 71 105 64 114 Z" fill="#ffffff"/>
+  <!-- Chat bubble (gradient blue) with tail -->
+  <g fill="url(#bg)">
+    <circle cx="64" cy="53" r="24"/>
+    <path d="M50 71 L42 84 L61 76 Z"/>
+  </g>
+  <!-- Three dots -->
+  <g fill="#ffffff">
+    <circle cx="52.5" cy="53" r="4.4"/>
+    <circle cx="64" cy="53" r="4.4"/>
+    <circle cx="75.5" cy="53" r="4.4"/>
+  </g>
+</svg>
