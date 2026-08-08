@@ -197,11 +197,33 @@ export function App() {
     setPinError(null);
     setPinning(true);
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) {
+    if (!tab?.id || !tab.url) {
       setPinError('No active tab found.');
       setPinning(false);
       return;
     }
+
+    // Injection and captureVisibleTab need host access for the page's
+    // origin. activeTab doesn't cover side-panel clicks, so ask for the
+    // site on first pin (one-time Chrome prompt per origin).
+    let origin: string;
+    try {
+      const url = new URL(tab.url);
+      if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('restricted');
+      origin = url.origin;
+    } catch {
+      setPinError("Pins can't be placed on this page.");
+      setPinning(false);
+      return;
+    }
+
+    const granted = await chrome.permissions.request({ origins: [`${origin}/*`] }).catch(() => false);
+    if (!granted) {
+      setPinError('Nitpick needs access to this site to place pins. Click "Drop a pin" again and allow it.');
+      setPinning(false);
+      return;
+    }
+
     const result = await chrome.runtime.sendMessage({ type: 'startPinMode', tabId: tab.id })
       .catch(err => ({ success: false, error: String(err) }));
     if (!result?.success) {

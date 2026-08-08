@@ -11,7 +11,8 @@
     "tabs"
   ],
   "optional_host_permissions": [
-    "https://*/*"
+    "https://*/*",
+    "http://*/*"
   ],
   "side_panel": {
     "default_path": "sidepanel.html"
