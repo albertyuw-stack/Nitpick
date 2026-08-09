@@ -10,7 +10,10 @@ const label: React.CSSProperties = {
   color: 'var(--color-gray-700)',
 };
 
-const PAT_DOCS_URL = 'https://confluence.atlassian.com/enterprise/using-personal-access-tokens-1026032365.html';
+const TOKEN_DOCS = [
+  { label: 'Jira Cloud', url: 'https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/' },
+  { label: 'Jira Server', url: 'https://confluence.atlassian.com/enterprise/using-personal-access-tokens-1026032365.html' },
+];
 
 function statusTagVariant(status: string): string {
   const s = status.toLowerCase();
@@ -36,6 +39,7 @@ export function App() {
   const [email, setEmail] = useState('');
   const [useCloudAuth, setUseCloudAuth] = useState(false);
   const [showToken, setShowToken] = useState(false);
+  const [showTokenHelp, setShowTokenHelp] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [instanceDomain, setInstanceDomain] = useState('');
@@ -450,9 +454,53 @@ export function App() {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-              <label style={label}>{useCloudAuth ? 'API token' : 'Personal Access Token'}</label>
+              <label style={label}>API Token</label>
               {!showConnected && (
-                <a href={PAT_DOCS_URL} target="_blank" rel="noreferrer" style={{ fontSize: 11 }}>Where do I find this?</a>
+                <span style={{ position: 'relative' }}>
+                  <a
+                    href="#"
+                    onClick={e => { e.preventDefault(); setShowTokenHelp(v => !v); }}
+                    style={{ fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 3 }}
+                  >
+                    Where do I find this?
+                    <span style={{ fontSize: 8, lineHeight: 1 }}>▾</span>
+                  </a>
+                  {showTokenHelp && (
+                    <>
+                      <span
+                        onClick={() => setShowTokenHelp(false)}
+                        style={{ position: 'fixed', inset: 0, zIndex: 10 }}
+                      />
+                      <span style={{
+                        position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 11,
+                        minWidth: 130, background: 'var(--color-black-white-white)',
+                        border: '1px solid var(--color-gray-200)', borderRadius: 6,
+                        boxShadow: '0 4px 12px rgba(0,0,0,.1)', padding: 4,
+                        display: 'flex', flexDirection: 'column',
+                      }}>
+                        {TOKEN_DOCS.map(doc => (
+                          <a
+                            key={doc.label}
+                            href={doc.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={() => setShowTokenHelp(false)}
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: 6,
+                              padding: '6px 10px', borderRadius: 4, fontSize: 12,
+                              color: 'var(--color-gray-700)', textDecoration: 'none',
+                            }}
+                            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--color-gray-50)'; }}
+                            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                          >
+                            {doc.label}
+                            <Icon name="ExternalLink" size={11} style={{ marginLeft: 'auto', color: 'var(--color-gray-400)' }} />
+                          </a>
+                        ))}
+                      </span>
+                    </>
+                  )}
+                </span>
               )}
             </div>
             <Input
